@@ -282,7 +282,7 @@ function makePlayer(r,human){return{r,human,x:0,h:0,vy:0,vx:0,face:1,grounded:tr
 const speedOf=p=>230+p.r.speed*17;
 const jumpV=p=>690+p.r.hops*20;
 const S={mode:'menu',players:[],off:null,def:null,ball:{mode:'held',x:0,y:0,vx:0,vy:0,holder:null,f:null,rot:0},
-  score:[0,0],diff:DIFF.varsity,shotClock:10,mustClear:false,timer:0,next:null,banner:'',sub:'',popups:[],netT:0,hype:0,paused:false,dribT:0,t:0,lastHuman:'wayne'};
+  score:[0,0],diff:DIFF.varsity,shotClock:10,mustClear:false,timer:0,next:null,banner:'',sub:'',popups:[],netT:0,hype:0,paused:false,dribT:0,t:0,lastHuman:'wayne',beaver:null};
 const other=p=>p===S.players[0]?S.players[1]:S.players[0];
 const idx=p=>S.players.indexOf(p);
 const nm=p=>p.r.first;
@@ -295,7 +295,7 @@ function startGame(humanKey){
   const otherKey=humanKey==='wayne'?'alex':'wayne';
   S.lastHuman=humanKey;
   S.players=[makePlayer(ROSTER[humanKey],true),makePlayer(ROSTER[otherKey],false)];
-  S.score=[0,0];S.diff=DIFF[diffKey];S.paused=false;S.popups=[];
+  S.score=[0,0];S.diff=DIFF[diffKey];S.paused=false;S.popups=[];S.beaver=null;
   $('nmL').textContent=ROSTER[humanKey].short;$('nmR').textContent=ROSTER[otherKey].short;
   $('toLbl').textContent='GAME TO '+target;
   $('result').hidden=true;
@@ -337,7 +337,7 @@ function shootDown(p){
     p.shooting=true;p.shotThree=p.x<ARC_X;jump(p);
   }else jump(p);
 }
-function shootUp(p){if(p.shooting&&S.ball.holder===p&&S.ball.mode==='held'&&!p.grounded)release(p,false);}
+function shootUp(p){if(S.mode!=='play')return;if(p.shooting&&S.ball.holder===p&&S.ball.mode==='held'&&!p.grounded)release(p,false);}
 const quality=p=>clamp(1-Math.abs(p.vy)/jumpV(p),0,1);
 function shotProb(p,q){
   const d=Math.abs(RIM_X-p.x),arcD=RIM_X-ARC_X;
@@ -398,6 +398,7 @@ addEventListener('keydown',e=>{
   else if(k==='Space'||k==='ArrowUp'||k==='KeyW'||k==='KeyJ'){if(!e.repeat)shootDown(human());}
   else if(k==='KeyX'||k==='KeyK'||k==='ShiftLeft'||k==='ShiftRight'){if(!e.repeat)doAction(human());}
   else if(k==='KeyP'||k==='Escape'){S.paused=!S.paused;}
+  else if(k==='KeyB'){if(!e.repeat)summonBeaver();}
 });
 addEventListener('keyup',e=>{
   const k=e.code;
@@ -458,6 +459,67 @@ function aiThink(p,dt){
   }
 }
 
+/* ---------- the beaver ---------- */
+function summonBeaver(){
+  if(S.mode!=='play'||S.paused||S.beaver)return;
+  const b=S.ball;if(b.mode!=='held'&&b.mode!=='loose')return;
+  const victim=b.mode==='held'?b.holder:S.off;
+  S.beaver={x:-70,dir:1,phase:'toBall',t:0,hop:0,vy:0,run:0,victim,benef:other(victim)};
+  S.mode='beaver';S.hype=1;
+  popup('BEAVER ON THE COURT!',W/2,112,'#fe8007',30);
+  tone(1250,.08,'triangle',.09,-500);setTimeout(()=>tone(1500,.08,'triangle',.09,-600),110);
+  say(['Wait, is that a beaver?','A beaver is loose in the gym!','Someone left the door open. Beaver on the floor!']);
+}
+function updateBeaver(dt){
+  const v=S.beaver,b=S.ball;
+  const runTo=(tx,sp)=>{const dx=tx-v.x;if(Math.abs(dx)>=4){v.dir=Math.sign(dx);v.x+=v.dir*Math.min(Math.abs(dx),sp*dt);v.run+=dt*22;}return Math.abs(tx-v.x)<4;};
+  if(v.hop>0||v.vy>0){v.hop+=v.vy*dt;v.vy-=G*dt;if(v.hop<=0){v.hop=0;v.vy=0;}}
+  if(v.phase==='toBall'){
+    if(b.mode!=='held'&&b.mode!=='loose'){v.phase='exit';return;}
+    runTo(b.x,640);
+    if(Math.abs(b.x-v.x)<22&&FLOOR-b.y<130){
+      if(b.mode==='held')b.holder.shooting=false;
+      Object.assign(b,{mode:'beaver',holder:null,vx:0,vy:0});
+      v.victim.stun=.8;S.hype=1;sfx.steal();
+      popup('BEAVER STEAL!',v.x,FLOOR-120,'#fe8007',26);
+      say(['The Beaver strips {n}!','{n} just got picked clean by a beaver.','Nobody guards the Beaver. Sorry, {n}.'],v.victim);
+      v.phase='toSpot';
+    }
+  }else if(v.phase==='toSpot'){
+    if(runTo(ARC_X-40,560)){v.dir=1;v.phase='shoot';v.hop=.1;v.vy=560;}
+  }else if(v.phase==='shoot'){
+    if(v.vy<=0){
+      const sx=v.x+v.dir*30,sy=FLOOR-v.hop-34,d=Math.abs(RIM_X-sx);
+      b.mode='flight';
+      b.f={x0:sx,y0:sy,tx:RIM_X,ty:RIM_Y-6,T:.55+d/1300,t:0,arcH:110+d*.28,make:true,shooter:v.benef,pts:3,blockRolled:true,beaver:true};
+      v.phase='watch';v.t=0;
+    }
+  }else if(v.phase==='watch'){
+    v.t+=dt;if(v.t>.7&&v.hop<=0)v.phase='exit';
+  }else if(v.phase==='exit'){
+    if(runTo(-90,720)){S.beaver=null;if(S.mode==='beaver')S.mode='play';}
+  }
+}
+function drawBeaver(){
+  const v=S.beaver;if(!v)return;
+  const x=v.x,y=FLOOR-v.hop,d=v.dir,ph=v.run;
+  ellipse(x,FLOOR+3,30-Math.min(14,v.hop/8),5,'rgba(0,0,0,.3)');
+  ctx.save();ctx.translate(x-d*36,y-12);ctx.rotate(d*(-.35+Math.sin(ph*2)*.15));
+  ellipse(0,0,20,7,'#4a2f17');ctx.strokeStyle='rgba(0,0,0,.35)';ctx.lineWidth=1;
+  for(let i=-12;i<=12;i+=6){ctx.beginPath();ctx.moveTo(i,-6);ctx.lineTo(i+4,6);ctx.stroke();}
+  ctx.restore();
+  ctx.lineCap='round';
+  const sw=v.hop>0?3:Math.sin(ph)*7;
+  for(const[lx,o]of[[-14,sw],[-6,-sw],[10,-sw],[18,sw]])line(x+d*lx,y-10,x+d*(lx+o),y-1,'#5a3a1e',6);
+  ellipse(x,y-20,30,17,'#8a5a2b');ellipse(x+d*4,y-14,18,9,'#b07a45');
+  const hx=x+d*28,hy=y-30+Math.sin(ph*2)*1.5;
+  ellipse(hx,hy,13,12,'#8a5a2b');ellipse(hx-d*6,hy-11,4,4,'#6b4423');
+  ellipse(hx+d*9,hy+3,6,5,'#b07a45');ellipse(hx+d*13,hy+1,2.5,2,'#1a0f06');
+  ellipse(hx+d*3,hy-4,2.2,2.4,'#ffffff');ellipse(hx+d*3.6,hy-4,1.2,1.4,'#000000');
+  ctx.fillStyle='#ffffff';ctx.fillRect(hx+d*9-(d<0?4:0),hy+7,4,6);
+  ctx.fillStyle='#071c2c';ctx.fillRect(hx-10,hy-9,20,3);
+}
+
 /* ---------- simulation ---------- */
 function updatePlayer(p,dt){
   for(const k of['crossT','crossCD','stealCD','stun','reachT','grabCD','follow'])if(p[k]>0)p[k]-=dt;
@@ -490,6 +552,7 @@ function updateBall(dt){
     }
     return;
   }
+  if(b.mode==='beaver'){const v=S.beaver;if(v){b.x=v.x+v.dir*40;b.y=FLOOR-v.hop-26;b.rot+=dt*4;}return;}
   if(b.mode==='flight'){
     const f=b.f;f.t+=dt;const u=Math.min(1,f.t/f.T);
     b.x=f.x0+(f.tx-f.x0)*u;b.y=f.y0+(f.ty-f.y0)*u-f.arcH*4*u*(1-u);b.rot+=dt*8;
@@ -510,7 +573,7 @@ function updateBall(dt){
         b.mode='net';b.x=RIM_X;b.y=RIM_Y;b.vy=220;b.vx=0;
         const i=idx(f.shooter);S.score[i]+=f.pts;S.netT=.6;S.hype=1;sfx.swish();
         popup('+'+f.pts,RIM_X-30,RIM_Y-40,f.pts===3?'#fe8007':'#fff',34);
-        say(f.pts===3?['{n} from downtown!','Splash. {n} buries the three.','{n} pulls up from deep and hits.']:
+        say(f.beaver?['The Beaver drains a three for {n}!','Beaver steal, Beaver splash. Three for {n}.','From downtown... the Beaver! Three for {n}.']:f.pts===3?['{n} from downtown!','Splash. {n} buries the three.','{n} pulls up from deep and hits.']:
           (Math.abs(RIM_X-f.x0)<130?['{n} finishes at the rim.','{n} lays it in.','Easy two for {n}.']:['{n} knocks down the jumper.','Pull-up two for {n}.','Money from mid-range, {n}.']),f.shooter);
         endPossession(other(f.shooter),1.25);
       }else{
@@ -538,6 +601,7 @@ function update(dt){
   S.t+=dt;S.hype=Math.max(0,S.hype-dt*.6);S.netT=Math.max(0,S.netT-dt);
   for(const pp of S.popups)pp.t+=dt;S.popups=S.popups.filter(pp=>pp.t<1.1);
   if(S.mode==='menu'||S.mode==='over'||S.paused)return;
+  if(S.beaver)updateBeaver(dt);
   if(S.mode==='check'){S.timer-=dt;updateBall(dt);if(S.timer<=0){S.mode='play';S.banner='';}return;}
   const live=S.mode==='play';
   for(const p of S.players){
@@ -629,7 +693,7 @@ function drawPlayer(p){
   ctx.fillStyle='rgba(5,8,15,.6)';const tw=ctx.measureText(r.short).width+12;ctx.fillRect(x-tw/2,tagY-13,tw,18);
   ctx.fillStyle=p.human?'#fe8007':'#eef2fa';ctx.fillText(r.short,x,tagY+1);
   if(p.human){ctx.fillStyle='#fe8007';ctx.beginPath();ctx.moveTo(x-5,tagY-19);ctx.lineTo(x+5,tagY-19);ctx.lineTo(x,tagY-14);ctx.fill();}
-  if(p.stun>0&&p.reachT<=0){ctx.fillStyle='#97a4c2';ctx.font='600 13px "Open Sans", sans-serif';ctx.fillText('reached…',x,tagY-22);}
+  if(p.stun>0&&p.reachT<=0){ctx.fillStyle='#97a4c2';ctx.font='600 13px "Open Sans", sans-serif';ctx.fillText(S.beaver&&S.beaver.victim===p?'beavered!':'reached…',x,tagY-22);}
   if(p.shooting&&hasBall&&!p.grounded&&p.human){
     const q=quality(p),mx=x-32,my=by-178;
     ctx.fillStyle='rgba(5,8,15,.75)';ctx.fillRect(mx-2,my-2,68,12);
@@ -670,7 +734,7 @@ function draw(){
   drawGym();drawHoopBack();
   const order=[...S.players].sort((a,b)=>(a===S.off)-(b===S.off));
   for(const p of order)drawPlayer(p);
-  drawBall();drawHoopFront();
+  drawBeaver();drawBall();drawHoopFront();
   drawOverlay();
 }
 let last={};
@@ -697,7 +761,9 @@ $('btnRematch').addEventListener('click',()=>{last={};startGame(S.lastHuman);});
 $('btnSwap').addEventListener('click',()=>{pick=S.lastHuman==='wayne'?'alex':'wayne';saveSettings();renderPick();last={};startGame(pick);});
 $('btnBack').addEventListener('click',toMenu);
 $('btnMenu').addEventListener('click',toMenu);
-cv.addEventListener('pointerdown',()=>{audio();if(S.paused)S.paused=false;});
+cv.addEventListener('pointerdown',e=>{audio();if(S.paused){S.paused=false;return;}
+  const r=cv.getBoundingClientRect(),lx=(e.clientX-r.left)/r.width*W,ly=(e.clientY-r.top)/r.height*H;
+  if(lx>372&&lx<508&&ly>12&&ly<108)summonBeaver();});
 })();
 </script>
 </html>
